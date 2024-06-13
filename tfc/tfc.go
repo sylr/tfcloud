@@ -41,6 +41,16 @@ type Workspace struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+type WorkspaceVariable struct {
+	Workspace *Workspace
+	Variable  *tfe.Variable
+}
+
+type WorkspaceAccess struct {
+	Workspace *Workspace
+	Access    *tfe.TeamAccess
+}
+
 // RegistryModule represents a Terraform Cloud registry module.
 type RegistryModule struct {
 	ID              *string                             `json:"id"`
@@ -63,6 +73,10 @@ type TfCloud interface {
 	RunApply(RunID string) error
 	// WorkspaceList returns all the terraform workspaces in an organization.
 	WorkspaceList(organization string) ([]*Workspace, error)
+	// WorkspaceVariableList returns the specified terraform workspace variables.
+	WorkspaceVariableList(organization string) ([]*WorkspaceVariable, error)
+	// WorkspaceVariableList returns the specified terraform workspace variables.
+	TeamAccessList(organization string) ([]*tfe.TeamAccess, error)
 	// WorkspaceGet returns the specified terraform workspace.
 	WorkspaceGet(organization, workspace string) (*Workspace, error)
 	// WorkspaceUpdateVersion updates the terraform version config in the specified workspace.
@@ -224,7 +238,7 @@ func (c *tfclient) WorkspaceList(organization string) ([]*Workspace, error) {
 			return nil, err
 		}
 		workspaces = append(workspaces, wslist.Items...)
-		if wslist.CurrentPage == wslist.TotalPages {
+		if wslist.CurrentPage >= wslist.TotalPages {
 			break
 		}
 		wlo.PageNumber = wslist.NextPage
@@ -252,6 +266,136 @@ func (c *tfclient) WorkspaceList(organization string) ([]*Workspace, error) {
 	}
 
 	return result, nil
+}
+
+func (c *tfclient) WorkspaceVariableList(organization string) ([]*WorkspaceVariable, error) {
+	wlo := &tfe.WorkspaceListOptions{
+		ListOptions: *defaultListOptions,
+		Search:      "",
+	}
+
+	vars := make([]*WorkspaceVariable, 0)
+
+	for {
+		wslist, err := c.client.Workspaces.List(c.ctx, organization, wlo)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, workspace := range wslist.Items {
+			vcsRepoName := ""
+			if workspace.VCSRepo != nil {
+				vcsRepoName = workspace.VCSRepo.Identifier
+			}
+			w := &Workspace{
+				ID:               &workspace.ID,
+				Name:             &workspace.Name,
+				TerraformVersion: &workspace.TerraformVersion,
+				ExecutionMode:    &workspace.ExecutionMode,
+				AutoApply:        &workspace.AutoApply,
+				CurrentRun:       workspace.CurrentRun,
+				VCSRepoName:      &vcsRepoName,
+				WorkingDirectory: &workspace.WorkingDirectory,
+				ResourceCount:    &workspace.ResourceCount,
+				CreatedAt:        workspace.CreatedAt,
+				UpdatedAt:        workspace.UpdatedAt,
+			}
+
+			vlo := &tfe.VariableListOptions{
+				ListOptions: *defaultListOptions,
+			}
+
+			for {
+				vslist, err := c.client.Variables.List(c.ctx, *w.ID, vlo)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, v := range vslist.Items {
+					v := &WorkspaceVariable{
+						Workspace: w,
+						Variable:  v,
+					}
+					vars = append(vars, v)
+				}
+
+				if vslist.CurrentPage == vslist.TotalPages {
+					break
+				}
+
+				vlo.PageNumber = vslist.NextPage
+			}
+		}
+
+		if wslist.CurrentPage >= wslist.TotalPages {
+			break
+		}
+
+		wlo.PageNumber = wslist.NextPage
+	}
+
+	return vars, nil
+}
+
+func (c *tfclient) TeamAccessList(organization string) ([]*tfe.TeamAccess, error) {
+	accesses := make([]*tfe.TeamAccess, 10)
+	teams := make(map[string]*tfe.Team)
+
+	wlo := &tfe.WorkspaceListOptions{
+		ListOptions: *defaultListOptions,
+		Search:      "",
+	}
+
+	for {
+		wslist, err := c.client.Workspaces.List(c.ctx, organization, wlo)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, workspace := range wslist.Items {
+			//fmt.Printf("#%d workspace access: %s\n", i, workspace.Name)
+			tlo := &tfe.TeamAccessListOptions{
+				ListOptions: *defaultListOptions,
+				WorkspaceID: workspace.ID,
+			}
+			for j := 0; ; j++ {
+				//fmt.Printf("#%d team access list option: %v\n", j, tlo)
+				vslist, err := c.client.TeamAccess.List(c.ctx, tlo)
+				if err != nil {
+					return nil, err
+				}
+
+				for _, v := range vslist.Items {
+					if _, ok := teams[v.Team.ID]; !ok {
+						team, err := c.client.Teams.Read(c.ctx, v.Team.ID)
+						if err != nil {
+							return nil, err
+						}
+						teams[v.Team.ID] = team
+					}
+
+					v.Workspace = workspace
+					v.Team = teams[v.Team.ID]
+
+					accesses = append(accesses, v)
+				}
+
+				if vslist.CurrentPage >= vslist.TotalPages {
+					break
+				}
+
+				tlo.PageNumber = vslist.NextPage
+			}
+		}
+
+		if wslist.CurrentPage == wslist.TotalPages {
+			break
+		}
+
+		wlo.PageNumber = wslist.NextPage
+	}
+
+	return accesses, nil
 }
 
 func (c *tfclient) WorkspaceGet(organization, workspace string) (*Workspace, error) {

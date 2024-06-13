@@ -58,6 +58,9 @@ func main() {
 		"workspace list": func() (cli.Command, error) {
 			return &commands.WorkspaceListCommand{Command: command}, nil
 		},
+		"workspace variables": func() (cli.Command, error) {
+			return &commands.WorkspaceVariablesCommand{Command: command}, nil
+		},
 		"workspace upgrade": func() (cli.Command, error) {
 			return &commands.WorkspaceUpgradeCommand{Command: command}, nil
 		},
@@ -72,6 +75,9 @@ func main() {
 		},
 		"module versions": func() (cli.Command, error) {
 			return &commands.ModuleVersionsCommand{Command: command}, nil
+		},
+		"team accesses": func() (cli.Command, error) {
+			return &commands.TeamAccessListCommand{Command: command}, nil
 		},
 	}
 
